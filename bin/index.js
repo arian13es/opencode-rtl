@@ -300,7 +300,24 @@ async function main() {
 
     if (checkRunningProcesses()) {
         console.log(yellow('\n[!] Notice: OpenCode is currently running.'));
-        console.log(dim('    It is recommended to close OpenCode before patching, or restart it immediately after completion.\n'));
+        const response = await prompts({
+            type: 'confirm',
+            name: 'closeApp',
+            message: 'Would you like to close OpenCode now to prevent file locks?',
+            initial: true
+        });
+        if (response && response.closeApp) {
+            try {
+                if (os.platform() === 'win32') {
+                    execSync('taskkill /IM OpenCode.exe /F', { stdio: 'ignore' });
+                } else {
+                    execSync('pkill -f -i opencode || true', { stdio: 'ignore' });
+                }
+                console.log(green('[✓] OpenCode processes closed cleanly.\n'));
+            } catch (e) {}
+        } else {
+            console.log(dim('    Proceeding without closing. Remember to restart OpenCode afterwards.\n'));
+        }
     }
 
     const detected = getCandidatePaths();

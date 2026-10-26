@@ -34,7 +34,7 @@
 
     const staticCSS = `
         .opencode-rtl-widget-container { 
-            position: fixed; z-index: 999999; 
+            position: fixed; z-index: 2147483647; 
             display: flex; flex-direction: column; 
             touch-action: none; user-select: none; 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -56,7 +56,7 @@
             width: 290px; 
             box-shadow: 0 16px 40px rgba(0,0,0,0.6); 
             max-height: 80vh; overflow-y: auto; 
-            backdrop-filter: blur(12px);
+            backdrop-filter: blur(16px);
         }
         
         .opencode-rtl-theme-input { 
@@ -110,16 +110,65 @@
         .opencode-rtl-widget-trigger svg { transition: transform 0.3s; pointer-events: none; }
         .opencode-rtl-widget-panel.open ~ .opencode-rtl-widget-trigger svg { transform: rotate(90deg); }
 
-        /* Strictly protect code blocks and terminal from RTL mutation */
-        pre, code, pre *, code *, 
-        .monaco-editor, .monaco-editor *, 
-        .cm-editor, .cm-editor *, 
-        [data-code-block], [data-code-block] *, 
-        .font-mono, .font-mono *,
-        [class*="terminal"], [class*="terminal"] * {
+        /* CRITICAL BIDI ISOLATION FOR INLINE CODE & MONOSPACE */
+        code,
+        kbd,
+        samp,
+        var,
+        .font-mono {
+            direction: ltr !important;
+            unicode-bidi: isolate !important;
+            text-align: left !important;
+            font-family: var(--font-family-mono, "JetBrains Mono", Consolas, monospace) !important;
+        }
+
+        pre,
+        pre code,
+        .monaco-editor,
+        .monaco-editor *,
+        .cm-editor,
+        .cm-editor *,
+        [data-code-block],
+        [data-code-block] *,
+        [class*="terminal"],
+        [class*="terminal"] * {
             direction: ltr !important;
             text-align: left !important;
-            unicode-bidi: normal !important;
+            unicode-bidi: isolate !important;
+            font-family: var(--font-family-mono, "JetBrains Mono", Consolas, monospace) !important;
+        }
+
+        /* Math and KaTeX formulas */
+        .katex, .katex * {
+            direction: ltr !important;
+            unicode-bidi: isolate !important;
+        }
+
+        /* RTL block definitions */
+        [dir="rtl"] {
+            text-align: right !important;
+            direction: rtl !important;
+            unicode-bidi: isolate !important;
+        }
+
+        [dir="rtl"] p,
+        [dir="rtl"] li,
+        [dir="rtl"] h1,
+        [dir="rtl"] h2,
+        [dir="rtl"] h3,
+        [dir="rtl"] h4,
+        [dir="rtl"] h5,
+        [dir="rtl"] h6,
+        [dir="rtl"] blockquote {
+            text-align: right !important;
+            direction: rtl !important;
+            unicode-bidi: isolate !important;
+        }
+
+        [dir="ltr"] {
+            text-align: left !important;
+            direction: ltr !important;
+            unicode-bidi: isolate !important;
         }
     `;
     injectStyle('opencode-rtl-widget-style', staticCSS);
@@ -148,6 +197,14 @@
                 font-weight: 100 900;
                 unicode-range: ${persianUnicodeRange};
             }
+
+            :root, html, body, #root {
+                --font-family-sans: ${faFontName}, ${enFontStr}var(--font-sans, Inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+                --v2-font-family-sans: ${faFontName}, ${enFontStr}var(--font-sans, Inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+                --font-sans: ${faFontName}, ${enFontStr}Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+                --font-family-text: ${faFontName}, ${enFontStr}var(--font-sans, Inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            }
+
             .opencode-rtl-text-node,
             [dir="rtl"],
             [dir="rtl"] p,
@@ -156,11 +213,16 @@
             [dir="rtl"] h2,
             [dir="rtl"] h3,
             [dir="rtl"] h4,
-            [dir="rtl"] span {
-                font-family: ${faFontName}, ${enFontStr}var(--font-family-sans, var(--v2-font-family-sans, Inter, system-ui)), "Segoe UI Emoji" !important;
+            [dir="rtl"] span,
+            [dir="rtl"] a,
+            [dir="rtl"] blockquote {
+                font-family: ${faFontName}, ${enFontStr}var(--font-family-sans, Inter), "Segoe UI Emoji", sans-serif !important;
             }
+
             .opencode-rtl-text-node,
-            [dir="rtl"] {
+            [dir="rtl"],
+            [dir="rtl"] p,
+            [dir="rtl"] li {
                 font-size: ${fs}px !important;
                 line-height: ${lh} !important;
             }
@@ -515,7 +577,6 @@
             } else {
                 const s = document.getElementById('opencode-rtl-dynamic-style');
                 if (s) s.remove();
-                // Reset all affected elements
                 document.querySelectorAll('.opencode-rtl-text-node').forEach(el => {
                     el.removeAttribute('dir');
                     el.style.removeProperty('text-align');
@@ -547,79 +608,113 @@
     if (document.body) createWidget();
     else window.addEventListener('DOMContentLoaded', createWidget);
 
+    function getCleanText(el) {
+        let str = '';
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+            acceptNode: (node) => {
+                const parent = node.parentElement;
+                if (!parent) return NodeFilter.FILTER_ACCEPT;
+                const tag = parent.tagName;
+                if (['CODE', 'PRE', 'KBD', 'SAMP', 'VAR', 'SCRIPT', 'STYLE'].includes(tag)) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                if (parent.closest('pre, code, .monaco-editor, .cm-editor, [data-code-block], .katex')) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        });
+
+        while (walker.nextNode()) {
+            str += ' ' + walker.currentNode.nodeValue;
+        }
+        return str.replace(/[\u200B-\u200F\uFEFF]/g, '').trim();
+    }
+
+    function determineDirection(cleanText) {
+        if (forceRTL) return 'rtl';
+        if (!cleanText) return 'ltr';
+
+        const faMatches = cleanText.match(/[\u0600-\u06FF]/g) || [];
+        const enMatches = cleanText.match(/[A-Za-z]/g) || [];
+        const faCount = faMatches.length;
+        const enCount = enMatches.length;
+
+        if (faCount > 0) {
+            if (faCount >= enCount * 0.4 || faCount >= 3) {
+                return 'rtl';
+            }
+            const firstChar = cleanText.match(/[A-Za-z\u0600-\u06FF]/);
+            return firstChar && /[\u0600-\u06FF]/.test(firstChar[0]) ? 'rtl' : 'ltr';
+        }
+        return 'ltr';
+    }
+
     function updateDir() {
         if (!isRTL) return;
         
-        const allElements = document.querySelectorAll('*');
-        const textElements = [];
-        
-        for (let i = 0; i < allElements.length; i++) {
-            const el = allElements[i];
-            const tag = el.tagName;
-            
-            if (['P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SPAN', 'TEXTAREA', 'BLOCKQUOTE'].includes(tag)) {
-                textElements.push(el);
+        // Target BLOCK-level containers and editable inputs ONLY
+        // Never fracture inline spans into disconnected bidi runs!
+        const blockElements = document.querySelectorAll(`
+            p, 
+            li, 
+            h1, h2, h3, h4, h5, h6, 
+            blockquote, 
+            textarea, 
+            [contenteditable="true"], 
+            input[type="text"],
+            div.prose,
+            [class*="message"],
+            [class*="bubble"],
+            [class*="prompt"]
+        `);
+
+        for (let i = 0; i < blockElements.length; i++) {
+            const el = blockElements[i];
+
+            // Ignore widget elements
+            if (el.closest('.opencode-rtl-widget-container')) continue;
+
+            // Ignore code blocks, Monaco, terminals
+            if (el.closest('pre, .monaco-editor, .cm-editor, [data-code-block], [class*="terminal"]')) continue;
+            if (['PRE', 'CODE'].includes(el.tagName)) continue;
+
+            // For input / textarea / contenteditable
+            if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.getAttribute('contenteditable') === 'true') {
+                const val = el.value || el.textContent || '';
+                const clean = val.replace(/[\u200B-\u200F\uFEFF]/g, '').trim();
+                const dir = determineDirection(clean);
+                if (el.getAttribute('dir') !== dir) {
+                    el.setAttribute('dir', dir);
+                    el.style.setProperty('text-align', dir === 'rtl' ? 'right' : 'left', 'important');
+                    el.style.setProperty('direction', dir, 'important');
+                }
                 continue;
             }
-            if (el.getAttribute('contenteditable') === 'true') {
-                textElements.push(el);
-                continue;
-            }
-            if (tag === 'DIV') {
-                const cls = el.className || '';
-                if (typeof cls === 'string' && cls.match(/message|content|prose|chat|prompt|bubble|value|markdown/i)) {
-                    textElements.push(el);
-                    continue;
-                }
-                if (el.children.length === 0 && el.textContent.trim().length > 0) {
-                    textElements.push(el);
-                    continue;
-                }
-            }
-        }
-        
-        textElements.forEach(el => {
-            if (el.closest('.opencode-rtl-widget-container')) return;
-            // Never touch code blocks, editor matrices, or terminals
-            if (el.closest('pre, code, .monaco-editor, .cm-editor, [data-code-block], [class*="terminal"], .font-mono')) return;
-            
-            const text = el.textContent.replace(/[\u200B-\u200F\uFEFF]/g, '').trim();
-            if (!text) return;
-            
-            let dir = 'auto';
-            if (forceRTL) {
-                dir = 'rtl';
-            } else {
-                const firstChar = text.match(/[A-Za-z\u0600-\u06FF]/);
-                if (firstChar) {
-                    dir = /[\u0600-\u06FF]/.test(firstChar[0]) ? 'rtl' : 'ltr';
-                }
-            }
-            
+
+            // For text blocks (p, li, headings, etc.)
+            const cleanText = getCleanText(el);
+            if (!cleanText) continue;
+
+            const dir = determineDirection(cleanText);
+
             if (!el.classList.contains('opencode-rtl-text-node')) {
                 el.classList.add('opencode-rtl-text-node');
             }
-            
+
             if (el.getAttribute('dir') !== dir) {
                 el.setAttribute('dir', dir);
-                
-                if (dir === 'rtl') {
-                    el.style.setProperty('text-align', 'right', 'important');
-                    el.style.setProperty('direction', 'rtl', 'important');
-                    el.style.setProperty('unicode-bidi', 'isolate', 'important');
-                } else {
-                    el.style.setProperty('text-align', 'left', 'important');
-                    el.style.setProperty('direction', 'ltr', 'important');
-                    el.style.setProperty('unicode-bidi', 'isolate', 'important');
-                }
-                
+                el.style.setProperty('text-align', dir === 'rtl' ? 'right' : 'left', 'important');
+                el.style.setProperty('direction', dir, 'important');
+                el.style.setProperty('unicode-bidi', 'isolate', 'important');
+
+                // If inside a message bubble/container, align the container as well
                 const bubble = el.closest('[class*="message"], [class*="bubble"], [class*="prompt"], [class*="chat-item"]');
-                if (bubble) {
+                if (bubble && bubble.getAttribute('dir') !== dir) {
                     bubble.setAttribute('dir', dir);
-                    bubble.style.setProperty('direction', dir, 'important');
                 }
             }
-        });
+        }
     }
 
     document.addEventListener('input', updateDir, { capture: true });
