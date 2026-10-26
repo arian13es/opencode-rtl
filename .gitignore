@@ -1,0 +1,7 @@
+node_modules
+*.bak
+*-temp
+*-extracted-*
+temp-ref
+.DS_Store
+Thumbs.db
