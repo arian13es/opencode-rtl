@@ -1,6 +1,6 @@
 {
   "name": "opencode-pro-rtl",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A Universal Pro RTL (Right-to-Left) patcher with UI settings exclusively for the OpenCode ecosystem.",
   "main": "./bin/index.js",
   "scripts": {

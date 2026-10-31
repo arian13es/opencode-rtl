@@ -54,11 +54,29 @@ Options:
     process.exit(0);
 }
 
+let discoveredRunningPaths = [];
+
 function checkRunningProcesses() {
+    discoveredRunningPaths = [];
     try {
         if (os.platform() === 'win32') {
+            try {
+                const psCmd = `powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \\"Name like '%OpenCode%\\").ExecutablePath"`;
+                const psOut = execSync(psCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+                const lines = psOut.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+                for (const exePath of lines) {
+                    if (fs.existsSync(exePath)) {
+                        const dir = path.dirname(exePath);
+                        const asar = path.join(dir, 'resources', 'app.asar');
+                        const unpacked = path.join(dir, 'resources', 'app');
+                        if (fs.existsSync(asar) && !discoveredRunningPaths.includes(asar)) discoveredRunningPaths.push(asar);
+                        if (fs.existsSync(unpacked) && !discoveredRunningPaths.includes(unpacked)) discoveredRunningPaths.push(unpacked);
+                    }
+                }
+            } catch (e) {}
+
             const out = execSync('tasklist /FI "IMAGENAME eq OpenCode.exe" /NH', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-            return out.toLowerCase().includes('opencode.exe');
+            return out.toLowerCase().includes('opencode.exe') || discoveredRunningPaths.length > 0;
         } else {
             const out = execSync('pgrep -i opencode || true', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
             return out.trim().length > 0;
@@ -69,7 +87,7 @@ function checkRunningProcesses() {
 }
 
 function getCandidatePaths() {
-    const candidates = [];
+    const candidates = [...discoveredRunningPaths];
     const platform = os.platform();
 
     if (platform === 'win32') {
@@ -77,21 +95,75 @@ function getCandidatePaths() {
         const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
         const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
 
-        candidates.push(
-            // Primary OpenCode Desktop production installation
-            path.join(localAppData, 'Programs', '@opencodedesktop', 'resources', 'app.asar'),
-            // Standard naming variants
-            path.join(localAppData, 'Programs', 'OpenCode', 'resources', 'app.asar'),
-            path.join(localAppData, 'Programs', 'opencode', 'resources', 'app.asar'),
-            path.join(programFiles, 'OpenCode', 'resources', 'app.asar'),
-            path.join(programFilesX86, 'OpenCode', 'resources', 'app.asar'),
-            // Channels
-            path.join(localAppData, 'Programs', 'OpenCode Beta', 'resources', 'app.asar'),
-            path.join(localAppData, 'Programs', 'OpenCode Dev', 'resources', 'app.asar'),
-            // Unpacked app directory variants
-            path.join(localAppData, 'Programs', '@opencodedesktop', 'resources', 'app'),
-            path.join(localAppData, 'Programs', 'OpenCode', 'resources', 'app')
-        );
+        // High priority: modern and legacy OpenCode install directories
+        const knownFolderNames = [
+            'ai.opencode.desktop',
+            '@opencode-aidesktop',
+            '@opencodedesktop',
+            'OpenCode',
+            'opencode',
+            'OpenCode Beta',
+            'OpenCode Dev'
+        ];
+
+        for (const folder of knownFolderNames) {
+            candidates.push(
+                path.join(localAppData, 'Programs', folder, 'resources', 'app.asar'),
+                path.join(localAppData, 'Programs', folder, 'resources', 'app'),
+                path.join(programFiles, folder, 'resources', 'app.asar'),
+                path.join(programFiles, folder, 'resources', 'app'),
+                path.join(programFilesX86, folder, 'resources', 'app.asar'),
+                path.join(programFilesX86, folder, 'resources', 'app')
+            );
+        }
+
+        // Dynamic auto-discovery: scan program roots for any folder with "opencode"
+        const searchRoots = [
+            path.join(localAppData, 'Programs'),
+            programFiles,
+            programFilesX86
+        ];
+
+        for (const root of searchRoots) {
+            if (fs.existsSync(root)) {
+                try {
+                    const entries = fs.readdirSync(root, { withFileTypes: true });
+                    for (const entry of entries) {
+                        if (entry.isDirectory() && /opencode/i.test(entry.name)) {
+                            const asar = path.join(root, entry.name, 'resources', 'app.asar');
+                            const unpacked = path.join(root, entry.name, 'resources', 'app');
+                            if (fs.existsSync(asar) && !candidates.includes(asar)) candidates.push(asar);
+                            if (fs.existsSync(unpacked) && !candidates.includes(unpacked)) candidates.push(unpacked);
+                        }
+                    }
+                } catch (e) {}
+            }
+        }
+
+        // Shortcut auto-detection (.lnk)
+        const userProfile = process.env.USERPROFILE || '';
+        const shortcutLocations = [
+            path.join(userProfile, 'Desktop', 'OpenCode.lnk'),
+            path.join(userProfile, 'OneDrive', 'Desktop', 'OpenCode.lnk'),
+            path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'OpenCode.lnk'),
+            path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'OpenCode', 'OpenCode.lnk')
+        ];
+
+        for (const lnk of shortcutLocations) {
+            if (fs.existsSync(lnk)) {
+                try {
+                    const psCmd = `powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).CreateShortcut('${lnk.replace(/'/g, "''")}').TargetPath"`;
+                    const targetExe = execSync(psCmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+                    if (targetExe && fs.existsSync(targetExe)) {
+                        const dir = path.dirname(targetExe);
+                        const asar = path.join(dir, 'resources', 'app.asar');
+                        const unpacked = path.join(dir, 'resources', 'app');
+                        if (fs.existsSync(asar) && !candidates.includes(asar)) candidates.push(asar);
+                        if (fs.existsSync(unpacked) && !candidates.includes(unpacked)) candidates.push(unpacked);
+                    }
+                } catch (e) {}
+            }
+        }
     } else if (platform === 'darwin') {
         const home = process.env.HOME || '';
         candidates.push(
@@ -100,6 +172,7 @@ function getCandidatePaths() {
             '/Applications/OpenCode Beta.app/Contents/Resources/app.asar',
             '/Applications/OpenCode Dev.app/Contents/Resources/app.asar',
             '/Applications/@opencodedesktop.app/Contents/Resources/app.asar',
+            '/Applications/ai.opencode.desktop.app/Contents/Resources/app.asar',
             // Unpacked
             '/Applications/OpenCode.app/Contents/Resources/app'
         );
@@ -109,6 +182,7 @@ function getCandidatePaths() {
         candidates.push(
             '/opt/OpenCode/resources/app.asar',
             '/opt/opencode/resources/app.asar',
+            '/opt/ai.opencode.desktop/resources/app.asar',
             '/usr/lib/opencode/resources/app.asar',
             '/usr/share/opencode/resources/app.asar',
             path.join(home, '.local', 'share', 'opencode', 'resources', 'app.asar'),
@@ -116,7 +190,9 @@ function getCandidatePaths() {
         );
     }
 
-    return candidates.filter(p => fs.existsSync(p));
+    // Deduplicate and filter existing paths
+    const unique = Array.from(new Set(candidates));
+    return unique.filter(p => fs.existsSync(p));
 }
 
 async function patchUnpackedApp(appDir, isRestore) {
